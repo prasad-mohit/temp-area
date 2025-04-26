@@ -132,60 +132,82 @@ def process_flight_data(flight_data):
         return None
     
     for offer in flight_data['data']:
-        # Basic flight info
-        airline_code = offer['itineraries'][0]['segments'][0]['carrierCode']
-        airline_logo = AIRLINE_LOGOS.get(airline_code, AIRLINE_LOGOS['default'])
-        
-        # Flight segments
-        segments = offer['itineraries'][0]['segments']
-        first_segment = segments[0]
-        last_segment = segments[-1]
-        
-        # Calculate duration
-        departure_time = parser.parse(first_segment['departure']['at'])
-        arrival_time = parser.parse(last_segment['arrival']['at'])
-        duration = arrival_time - departure_time
-        hours, remainder = divmod(duration.seconds, 3600)
-        minutes = remainder // 60
-        duration_str = f"{hours}h {minutes}m"
-        
-        # Fare details
-        price = float(offer['price']['grandTotal'])
-        
-        # Baggage info
-        baggage_allowance = "7 kg cabin"
-        if 'travelerPricings' in offer and len(offer['travelerPricings']) > 0:
-            if 'fareDetailsBySegment' in offer['travelerPricings'][0] and len(offer['travelerPricings'][0]['fareDetailsBySegment']) > 0:
-                baggage = offer['travelerPricings'][0]['fareDetailsBySegment'][0].get('includedCheckedBags', {})
-                if 'weight' in baggage and 'weightUnit' in baggage:
-                    baggage_allowance = f"7 kg cabin, {baggage['weight']} {baggage['weightUnit']} checked"
-        
-        # Flexibility info
-        flexibility = "Standard"
-        if 'nonHomogeneous' in offer and offer['nonHomogeneous']:
-            flexibility = "Flexible"
-        
-        # Cancellation policy
-        cancellation = "Refundable with fees"
-        if 'nonRefundable' in offer and offer['nonRefundable']:
-            cancellation = "Non-refundable"
-        
-        processed_flight = {
-            "Airline": airline_code,
-            "Airline Logo": airline_logo,
-            "Source": first_segment['departure']['iataCode'],
-            "Departure": departure_time.strftime("%a, %d-%b-%y %H:%M:%S"),
-            "Destination": last_segment['arrival']['iataCode'],
-            "Duration": duration_str,
-            "Arrival": arrival_time.strftime("%a, %d-%b-%y %H:%M:%S"),
-            "Baggage": baggage_allowance,
-            "Flexibility": flexibility,
-            "Class": offer['class'][0].upper() + offer['class'][1:].lower(),
-            "Price (OMR)": price,
-            "Cancellation Policy": cancellation,
-            "raw_data": offer
-        }
-        processed_flights.append(processed_flight)
+        try:
+            # Basic flight info
+            airline_code = offer['itineraries'][0]['segments'][0]['carrierCode']
+            airline_logo = AIRLINE_LOGOS.get(airline_code, AIRLINE_LOGOS['default'])
+            
+            # Flight segments
+            segments = offer['itineraries'][0]['segments']
+            first_segment = segments[0]
+            last_segment = segments[-1]
+            
+            # Calculate duration
+            departure_time = parser.parse(first_segment['departure']['at'])
+            arrival_time = parser.parse(last_segment['arrival']['at'])
+            duration = arrival_time - departure_time
+            hours, remainder = divmod(duration.seconds, 3600)
+            minutes = remainder // 60
+            duration_str = f"{hours}h {minutes}m"
+            
+            # Fare details
+            price = float(offer['price']['grandTotal'])
+            
+            # Baggage info - more robust extraction
+            baggage_allowance = "7 kg cabin"
+            if 'travelerPricings' in offer and offer['travelerPricings']:
+                traveler_pricing = offer['travelerPricings'][0]
+                if 'fareDetailsBySegment' in traveler_pricing and traveler_pricing['fareDetailsBySegment']:
+                    fare_details = traveler_pricing['fareDetailsBySegment'][0]
+                    if 'includedCheckedBags' in fare_details:
+                        baggage = fare_details['includedCheckedBags']
+                        if 'weight' in baggage and 'weightUnit' in baggage:
+                            baggage_allowance = f"7 kg cabin, {baggage['weight']} {baggage['weightUnit']} checked"
+            
+            # Flexibility info
+            flexibility = "Standard"
+            if 'nonHomogeneous' in offer and offer['nonHomogeneous']:
+                flexibility = "Flexible"
+            
+            # Cancellation policy
+            cancellation = "Refundable with fees"
+            if 'nonRefundable' in offer and offer['nonRefundable']:
+                cancellation = "Non-refundable"
+            
+            # Get travel class - more robust handling
+            travel_class = "Economy"  # Default
+            if 'travelerPricings' in offer and offer['travelerPricings']:
+                traveler_pricing = offer['travelerPricings'][0]
+                if 'fareOption' in traveler_pricing:
+                    fare_option = traveler_pricing['fareOption']
+                    if fare_option == "STANDARD":
+                        travel_class = "Economy"
+                    elif fare_option == "FLEXIBLE":
+                        travel_class = "Premium Economy"
+                    elif fare_option == "BUSINESS":
+                        travel_class = "Business"
+                    elif fare_option == "FIRST":
+                        travel_class = "First"
+            
+            processed_flight = {
+                "Airline": airline_code,
+                "Airline Logo": airline_logo,
+                "Source": first_segment['departure']['iataCode'],
+                "Departure": departure_time.strftime("%a, %d-%b-%y %H:%M:%S"),
+                "Destination": last_segment['arrival']['iataCode'],
+                "Duration": duration_str,
+                "Arrival": arrival_time.strftime("%a, %d-%b-%y %H:%M:%S"),
+                "Baggage": baggage_allowance,
+                "Flexibility": flexibility,
+                "Class": travel_class,
+                "Price (OMR)": price,
+                "Cancellation Policy": cancellation,
+                "raw_data": offer
+            }
+            processed_flights.append(processed_flight)
+        except Exception as e:
+            st.warning(f"Skipping a flight due to processing error: {str(e)}")
+            continue
     
     return processed_flights
 
@@ -199,7 +221,7 @@ with st.form("flight_search_form"):
     with col1:
         origin = st.selectbox("From", options=list(AIRPORT_CODES.keys()), format_func=lambda x: f"{x} - {AIRPORT_CODES[x]}")
         departure_date = st.date_input("Departure Date", min_value=datetime.today())
-        flight_class = st.selectbox("Class", ["Economy", "Premium Economy", "Business", "First"])
+        flight_class = st.selectbox("Class", ["ECONOMY", "PREMIUM_ECONOMY", "BUSINESS", "FIRST"])
     with col2:
         destination = st.selectbox("To", options=list(AIRPORT_CODES.keys()), format_func=lambda x: f"{x} - {AIRPORT_CODES[x]}")
         return_date = st.date_input("Return Date (optional)", min_value=datetime.today() + timedelta(days=1))
